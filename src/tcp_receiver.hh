@@ -30,7 +30,6 @@ public:
 private:
   Reassembler reassembler_;
   bool isn_set_ = false;
-  bool rst_set_ = false;
   Wrap32 next_seqno_;
   Wrap32 isn_;
 };

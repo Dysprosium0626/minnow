@@ -7,38 +7,33 @@ using namespace std;
 void TCPReceiver::receive( TCPSenderMessage message )
 {
   if ( message.RST ) {
-    rst_set_ = true;
+    reassembler_.reader().set_error();
     return;
   }
   if ( !isn_set_ && message.SYN ) {
     isn_ = message.seqno;
     isn_set_ = true;
-    next_seqno_ = message.seqno + message.sequence_length();
   }
   if ( !isn_set_ ) {
     return;
   }
-  auto first_unassembled = reassembler_.writer().bytes_pushed();
-  if ( message.FIN ) {
-    reassembler_.insert( message.seqno.unwrap( isn_, first_unassembled ), message.payload, message.FIN );
-    return;
+
+  uint64_t insert_index
+    = message.seqno.unwrap( isn_, reassembler_.writer().bytes_pushed() ) - ( message.SYN ? 0 : 1 );
+  reassembler_.insert( insert_index, message.payload, message.FIN );
+  next_seqno_ = isn_ + 1 + reassembler_.writer().bytes_pushed();
+  if ( reassembler_.writer().is_closed() ) {
+    next_seqno_ = next_seqno_ + 1;
   }
-  
-  reassembler_.insert( message.seqno.unwrap( isn_, first_unassembled ) - 1, message.payload, message.FIN );
 }
 
 TCPReceiverMessage TCPReceiver::send() const
 {
-  TCPReceiverMessage msg {};
-  msg.window_size = reassembler_.writer().available_capacity() < UINT16_MAX
-                      ? reassembler_.writer().available_capacity()
-                      : UINT16_MAX;
-  if ( rst_set_ ) {
-    msg.RST = true;
-    return msg;
-  }
+  uint16_t window_size = static_cast<uint16_t>(min( reassembler_.writer().available_capacity(), static_cast<uint64_t>(UINT16_MAX) ));
+  auto rst = reassembler_.writer().has_error();
   if ( isn_set_ ) {
-    msg.ackno = next_seqno_;
+    return { next_seqno_, window_size, rst };
+  } else {
+    return { {}, window_size, rst };
   }
-  return msg;
 }
