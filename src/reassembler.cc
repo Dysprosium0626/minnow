@@ -16,6 +16,10 @@ void Reassembler::insert( uint64_t first_index, string data, bool is_last_substr
     return;
   }
 
+  if ( is_last_substring ) {
+    last_index_ = first_index + data.size();
+  }
+
   // if duplicate, truncate the data
   if ( first_index < output_.writer().bytes_pushed() ) {
     data = data.substr( output_.writer().bytes_pushed() - first_index,
@@ -26,10 +30,6 @@ void Reassembler::insert( uint64_t first_index, string data, bool is_last_substr
   // push immediately
   if ( first_index == output_.writer().bytes_pushed() ) {
     output_.writer().push( data );
-    if ( is_last_substring ) {
-      output_.writer().close();
-      return;
-    }
     // search any avaliable data
     auto next_index = first_index + data.size();
     while ( !buffer_first_index_set_.empty() && next_index >= *buffer_first_index_set_.begin() ) {
@@ -48,10 +48,10 @@ void Reassembler::insert( uint64_t first_index, string data, bool is_last_substr
       buffer_.erase( next_in_buffer_index );
       buffer_first_index_set_.erase( next_in_buffer_index );
       next_index = next_index + next_data.size();
-      if ( next_index == last_index_ ) {
-        output_.writer().close();
-        return;
-      }
+    }
+    if ( output_.writer().bytes_pushed() == last_index_ ) {
+      output_.writer().close();
+      return;
     }
   } else if ( first_index < output_.writer().bytes_pushed() + output_.writer().available_capacity() ) {
     if ( is_last_substring ) {
