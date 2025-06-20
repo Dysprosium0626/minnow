@@ -5,13 +5,20 @@
 #include "tcp_sender_message.hh"
 
 #include <functional>
+#include <map>
 
 class TCPSender
 {
 public:
   /* Construct TCP sender with given default Retransmission Timeout and possible ISN */
   TCPSender( ByteStream&& input, Wrap32 isn, uint64_t initial_RTO_ms )
-    : input_( std::move( input ) ), isn_( isn ), initial_RTO_ms_( initial_RTO_ms )
+    : input_( std::move( input ) )
+    , isn_( isn )
+    , initial_RTO_ms_( initial_RTO_ms )
+    , next_seqno_( isn )
+    , last_ackno_( isn )
+    , unacknowledged_segments_()
+    , retransmission_timeout_ms_()
   {}
 
   /* Generate an empty TCPSenderMessage */
@@ -42,4 +49,15 @@ private:
   ByteStream input_;
   Wrap32 isn_;
   uint64_t initial_RTO_ms_;
+  Wrap32 next_seqno_;
+  Wrap32 last_ackno_;
+  std::map<uint64_t, TCPSenderMessage> unacknowledged_segments_;
+  std::map<uint64_t, uint64_t> retransmission_timeout_ms_;
+  uint64_t window_size_ = 1;
+  bool is_syn_sent_ = false;
+  bool is_syn_acked_ = false;
+  bool is_fin_sent_ = false;
+  uint64_t current_ms_ = 0;
+  uint64_t current_RTO_ms_ = initial_RTO_ms_;
+  uint64_t consecutive_retransmissions_ = 0;
 };
