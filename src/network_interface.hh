@@ -4,6 +4,7 @@
 #include "ethernet_frame.hh"
 #include "ipv4_datagram.hh"
 
+#include <map>
 #include <memory>
 #include <queue>
 
@@ -82,4 +83,18 @@ private:
 
   // Datagrams that have been received
   std::queue<InternetDatagram> datagrams_received_ {};
+  std::map<uint32_t, std::queue<EthernetFrame>> queued_frames_ {};
+
+  // ARP table
+  std::map<uint32_t, EthernetAddress> arp_table_;
+  std::map<uint32_t, size_t> arp_table_broadcast_timestamps_ {};
+
+  // ARP requests that have been sent
+  std::map<uint32_t, ARPMessage> arp_requests_;
+  std::map<uint32_t, size_t> arp_request_timestamps_;
+
+  // Current time in milliseconds
+  size_t current_time_ms_ {0};
+  uint32_t arp_request_timeout_ms_ { 5000 };          // 5 seconds
+  uint32_t arp_table_broadcast_timeout_ms_ { 30000 }; // 30 seconds
 };
