@@ -72,3 +72,18 @@ void EthernetHeader::serialize( Serializer& serializer ) const
   // write frame type (e.g. IPv4, ARP, or something else)
   serializer.integer( type );
 }
+
+bool operator==( const EthernetAddress& a, const EthernetAddress& b )
+{
+  for ( size_t index = 0; index < a.size(); index++ ) {
+    if ( a.at( index ) != b.at( index ) ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool operator!=( const EthernetAddress& a, const EthernetAddress& b )
+{
+  return !( a == b );
+}

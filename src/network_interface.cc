@@ -50,9 +50,9 @@ void NetworkInterface::send_datagram( const InternetDatagram& dgram, const Addre
     port_->transmit( *this, frame );
   } else {
     // If the destination IP address is not in the ARP table, send an ARP request
-    // Create an ARP request message
 
-    // Check if the ARP request is already in the queue and
+    // Check if the ARP request is already in the queue
+    bool need_arp_request = true;
     if ( arp_requests_.find( next_hop.ipv4_numeric() ) != arp_requests_.end() ) {
       // If the ARP request is in the queue, update the timestamp
       auto arp_time = arp_request_timestamps_[next_hop.ipv4_numeric()];
@@ -60,42 +60,44 @@ void NetworkInterface::send_datagram( const InternetDatagram& dgram, const Addre
         // If the ARP request has timed out, send a new one
         arp_requests_.erase( next_hop.ipv4_numeric() );
         arp_request_timestamps_.erase( next_hop.ipv4_numeric() );
+        need_arp_request = true;
       } else {
-        // If the ARP request has not timed out, do nothing
-        return;
+        // If the ARP request has not timed out, queue the datagram
+        need_arp_request = false;
       }
     }
 
     // If the ARP request is not in the queue, create a new one
-    ARPMessage arp;
-    arp.opcode = ARPMessage::OPCODE_REQUEST;
-    arp.sender_ethernet_address = ethernet_address_;
-    arp.sender_ip_address = ip_address_.ipv4_numeric();
-    arp.target_ip_address = next_hop.ipv4_numeric();
+    if ( need_arp_request ) {
+      ARPMessage arp;
+      arp.opcode = ARPMessage::OPCODE_REQUEST;
+      arp.sender_ethernet_address = ethernet_address_;
+      arp.sender_ip_address = ip_address_.ipv4_numeric();
+      arp.target_ip_address = next_hop.ipv4_numeric();
 
-    // Send the ARP request
-    EthernetFrame frame;
-    frame.header.type = EthernetHeader::TYPE_ARP;
-    frame.header.src = ethernet_address_;
-    frame.header.dst = ETHERNET_BROADCAST;
-    Serializer s;
-    arp.serialize( s );
-    frame.payload = s.finish();
-    port_->transmit( *this, frame );
+      // Send the ARP request
+      EthernetFrame frame;
+      frame.header.type = EthernetHeader::TYPE_ARP;
+      frame.header.src = ethernet_address_;
+      frame.header.dst = ETHERNET_BROADCAST;
+      Serializer s;
+      arp.serialize( s );
+      frame.payload = s.finish();
+      port_->transmit( *this, frame );
 
-    // Add the ARP request to the queue
-    arp_requests_[next_hop.ipv4_numeric()] = arp;
-    arp_request_timestamps_[next_hop.ipv4_numeric()] = current_time_ms_;
+      // Add the ARP request to the queue
+      arp_requests_[next_hop.ipv4_numeric()] = arp;
+      arp_request_timestamps_[next_hop.ipv4_numeric()] = current_time_ms_;
+    }
 
     // Add the IPv4 datagram to the queue
     EthernetFrame ipv4_frame;
     ipv4_frame.header.type = EthernetHeader::TYPE_IPv4;
-    ipv4_frame.header.dst = arp_table_[next_hop.ipv4_numeric()];
     ipv4_frame.header.src = ethernet_address_;
     Serializer ipv4_s;
     dgram.serialize( ipv4_s );
     ipv4_frame.payload = ipv4_s.finish();
-    queued_frames_[next_hop.ipv4_numeric()].push( ipv4_frame );
+    queued_frames_[next_hop.ipv4_numeric()].emplace_back( ipv4_frame );
   }
 }
 
@@ -103,19 +105,8 @@ void NetworkInterface::send_datagram( const InternetDatagram& dgram, const Addre
 void NetworkInterface::recv_frame( EthernetFrame frame )
 {
   // ignore frames that are not for us
-  bool should_ignore = false;
-  for ( size_t index = 0; index < frame.header.dst.size(); index++ ) {
-    if ( frame.header.dst.at( index ) != ethernet_address_.at( index ) ) {
-      should_ignore = true;
-      break;
-    }
-  }
-
-  for ( size_t index = 0; index < frame.header.dst.size(); index++ ) {
-    if ( frame.header.dst.at( index ) != ETHERNET_BROADCAST.at( index ) ) {
-      should_ignore = true;
-      break;
-    }
+  if ( frame.header.dst != ethernet_address_ && frame.header.dst != ETHERNET_BROADCAST ) {
+    return;
   }
 
   if ( frame.header.type == EthernetHeader::TYPE_IPv4 ) {
@@ -132,8 +123,18 @@ void NetworkInterface::recv_frame( EthernetFrame frame )
     if ( arp.opcode == ARPMessage::OPCODE_REPLY ) {
       arp_table_[arp.sender_ip_address] = arp.sender_ethernet_address;
       arp_table_broadcast_timestamps_[arp.sender_ip_address] = current_time_ms_;
-
+      if ( queued_frames_.find( arp.sender_ip_address ) != queued_frames_.end() ) {
+        for ( EthernetFrame& f : queued_frames_[arp.sender_ip_address] ) {
+          f.header.dst = arp.sender_ethernet_address;
+          port_->transmit( *this, f );
+        }
+        queued_frames_.erase( arp.sender_ip_address );
+      }
     } else if ( arp.opcode == ARPMessage::OPCODE_REQUEST ) {
+      if ( arp.target_ip_address != ip_address_.ipv4_numeric() ) {
+        return;
+      }
+
       arp_table_[arp.sender_ip_address] = arp.sender_ethernet_address;
       arp_table_broadcast_timestamps_[arp.sender_ip_address] = current_time_ms_;
 
@@ -163,17 +164,18 @@ void NetworkInterface::tick( const size_t ms_since_last_tick )
   // Check if any ARP requests have timed out
   for ( auto it = arp_requests_.begin(); it != arp_requests_.end(); ) {
     if ( current_time_ms_ - arp_request_timestamps_[it->first] >= arp_request_timeout_ms_ ) {
-      it = arp_requests_.erase( it );
       arp_request_timestamps_.erase( it->first );
+      queued_frames_.erase( it->first );
+      it = arp_requests_.erase( it );
     } else {
       ++it;
     }
   }
   // Check if any ARP table broadcasts have timed out
-  for ( auto it = arp_table_broadcast_timestamps_.begin(); it != arp_table_broadcast_timestamps_.end(); ) {
-    if ( current_time_ms_ - it->second >= arp_table_broadcast_timeout_ms_ ) {
-      it = arp_table_broadcast_timestamps_.erase( it );
-      arp_table_.erase( it->first );
+  for ( auto it = arp_table_.begin(); it != arp_table_.end(); ) {
+    if ( current_time_ms_ - arp_table_broadcast_timestamps_[it->first] >= arp_table_broadcast_timeout_ms_ ) {
+      arp_table_broadcast_timestamps_.erase( it->first );
+      it = arp_table_.erase( it );
     } else {
       ++it;
     }

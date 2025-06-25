@@ -83,7 +83,7 @@ private:
 
   // Datagrams that have been received
   std::queue<InternetDatagram> datagrams_received_ {};
-  std::map<uint32_t, std::queue<EthernetFrame>> queued_frames_ {};
+  std::map<uint32_t, std::vector<EthernetFrame>> queued_frames_ {};
 
   // ARP table
   std::map<uint32_t, EthernetAddress> arp_table_;
